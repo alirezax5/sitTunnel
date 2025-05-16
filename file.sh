@@ -145,7 +145,7 @@ else
         echo "#!/bin/bash"
         echo "ip tunnel add $TUN_NAME mode sit remote $REMOTE_IP local $LOCAL_IP ttl 255"
         echo "ip link set $TUN_NAME up"
-        echo "ip link set dev $TUN_NAME mtu 1480"
+        echo "ip link set dev $TUN_NAME mtu 1420"
         echo "ip -6 addr add $CHOSEN_IPV6 dev $TUN_NAME"
         echo "ip -6 route add default dev $TUN_NAME"
     } > "$FILE_NAME"
