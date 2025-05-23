@@ -4,7 +4,6 @@ TUNNEL_DIR="/root/sit-tunnels"
 CRON_TMP="/tmp/current_cron"
 mkdir -p "$TUNNEL_DIR"
 
-# لیست آی‌پی‌های ثابت
 FIXED_IPV6_LIST=(
     "fd1d:fc98:b73e:b481::1/64"
     "fd2a:94b2:ee80:c211::1/64"
@@ -32,11 +31,11 @@ function add_tunnel() {
     read -p "Enter tunnel name (e.g., sit1): " TUN_NAME
     read -p "Enter remote IPv4 address: " REMOTE_IP
     read -p "Enter local IPv4 address: " LOCAL_IP
+    read -p "Enter the IPv6 address to use (e.g., fd1d:fc98:b73e:b481::1/64): " CHOSEN_IPV6
 
-    echo ""
-    read -p "Enter the IPv6 address to use (e.g., fd1d:fc98:b73e:b481::1): " CHOSEN_IPV6
+    CHOSEN_IPV6="${CHOSEN_IPV6%%/*}"
     FILE_NAME="$TUNNEL_DIR/${TUN_NAME}.sh"
-
+    PING_FILE="$TUNNEL_DIR/${TUN_NAME}-ping.sh"
 
     {
         echo "#!/bin/bash"
@@ -48,51 +47,55 @@ function add_tunnel() {
     } > "$FILE_NAME"
 
     chmod +x "$FILE_NAME"
-
     echo "Running tunnel script now..."
     bash "$FILE_NAME"
 
+    {
+        echo "#!/bin/bash"
+        echo "ping -6 -c 1 $CHOSEN_IPV6 > /dev/null || echo \"[$(date)] IPv6 $CHOSEN_IPV6 is unreachable\" >> /var/log/tunnel-ping.log"
+    } > "$PING_FILE"
+    chmod +x "$PING_FILE"
+
     crontab -l 2>/dev/null > "$CRON_TMP"
     echo "@reboot bash $FILE_NAME" >> "$CRON_TMP"
+    echo "0 * * * * bash $PING_FILE" >> "$CRON_TMP"
     crontab "$CRON_TMP"
 
-    echo "Tunnel script saved and applied: $FILE_NAME"
+    echo "Tunnel and ping script created:"
+    echo "  - $FILE_NAME"
+    echo "  - $PING_FILE"
 }
 
 function delete_tunnel() {
     echo "Available tunnels:"
-    ls "$TUNNEL_DIR" | nl
+    ls "$TUNNEL_DIR" | grep -E '\.sh$' | grep -v -- '-ping.sh' | nl
     read -p "Select the number to delete: " DEL_NUM
-
-    FILE_NAME=$(ls "$TUNNEL_DIR" | sed -n "${DEL_NUM}p")
+    FILE_NAME=$(ls "$TUNNEL_DIR" | grep -E '\.sh$' | grep -v -- '-ping.sh' | sed -n "${DEL_NUM}p")
     [ -z "$FILE_NAME" ] && echo "Invalid selection." && return
 
     FULL_PATH="$TUNNEL_DIR/$FILE_NAME"
+    TUN_NAME="${FILE_NAME%.sh}"
+    PING_PATH="$TUNNEL_DIR/${TUN_NAME}-ping.sh"
 
-    # استخراج نام تونل از داخل اسکریپت
-    TUN_NAME=$(grep -oP 'ip tunnel add \K\S+' "$FULL_PATH")
-
-    if [ -n "$TUN_NAME" ]; then
-        echo "Deleting tunnel interface: $TUN_NAME"
-        ip tunnel del "$TUN_NAME" 2>/dev/null
+    TUN_NAME_LINE=$(grep -oP 'ip tunnel add \K\S+' "$FULL_PATH")
+    if [ -n "$TUN_NAME_LINE" ]; then
+        echo "Deleting tunnel interface: $TUN_NAME_LINE"
+        ip tunnel del "$TUN_NAME_LINE" 2>/dev/null
     fi
 
-    # حذف از cron
-    crontab -l 2>/dev/null | grep -v "$FULL_PATH" > "$CRON_TMP"
+    crontab -l 2>/dev/null | grep -v "$FULL_PATH" | grep -v "$PING_PATH" > "$CRON_TMP"
     crontab "$CRON_TMP"
 
-    rm -f "$FULL_PATH"
-    echo "$FILE_NAME and tunnel $TUN_NAME deleted."
+    rm -f "$FULL_PATH" "$PING_PATH"
+    echo "$FILE_NAME and related ping script deleted."
 }
 
 function edit_tunnel() {
     echo "Available tunnels:"
-    ls "$TUNNEL_DIR" | nl
+    ls "$TUNNEL_DIR" | grep -E '\.sh$' | grep -v -- '-ping.sh' | nl
     read -p "Select the number to edit: " EDIT_NUM
-
-    FILE_NAME=$(ls "$TUNNEL_DIR" | sed -n "${EDIT_NUM}p")
+    FILE_NAME=$(ls "$TUNNEL_DIR" | grep -E '\.sh$' | grep -v -- '-ping.sh' | sed -n "${EDIT_NUM}p")
     [ -z "$FILE_NAME" ] && echo "Invalid selection." && return
-
     nano "$TUNNEL_DIR/$FILE_NAME"
 }
 
@@ -104,7 +107,6 @@ function show_ipv6_list() {
 }
 
 if [[ $# -eq 0 ]]; then
-    # اگر هیچ آرگومانی به اسکریپت وارد نشد، منو را نشان بده
     while true; do
         echo ""
         echo "==== SIT Tunnel Manager ===="
@@ -115,7 +117,6 @@ if [[ $# -eq 0 ]]; then
         echo "0) Exit"
         echo "============================"
         read -p "Choose an option: " choice
-
         case $choice in
             1) add_tunnel ;;
             2) delete_tunnel ;;
@@ -126,20 +127,19 @@ if [[ $# -eq 0 ]]; then
         esac
     done
 else
-    # اگر آرگومان‌ها وجود داشته باشند، تونل را به‌طور خودکار بساز
     TUN_NAME=$1
     REMOTE_IP=$2
     LOCAL_IP=$3
     CHOSEN_IPV6=$4
 
-    if [ -z "$TUN_NAME" ] || [ -z "$REMOTE_IP" ] || [ -z "$LOCAL_IP" ] || [ -z "$CHOSEN_IPV6" ]; then
-        echo "Usage: sh.sh <tunnel_name> <remote_ip> <local_ip> <ipv6_address>"
+    [ -z "$TUN_NAME" ] || [ -z "$REMOTE_IP" ] || [ -z "$LOCAL_IP" ] || [ -z "$CHOSEN_IPV6" ] && {
+        echo "Usage: $0 <tunnel_name> <remote_ip> <local_ip> <ipv6_address>"
         exit 1
-    fi
+    }
 
-    # ساخت تونل بدون نمایش منو
-     FILE_NAME="$TUNNEL_DIR/${TUN_NAME}.sh"
-
+    CHOSEN_IPV6="${CHOSEN_IPV6%%/*}"
+    FILE_NAME="$TUNNEL_DIR/${TUN_NAME}.sh"
+    PING_FILE="$TUNNEL_DIR/${TUN_NAME}-ping.sh"
 
     {
         echo "#!/bin/bash"
@@ -149,15 +149,19 @@ else
         echo "ip -6 addr add $CHOSEN_IPV6 dev $TUN_NAME"
         echo "ip -6 route add default dev $TUN_NAME"
     } > "$FILE_NAME"
-
     chmod +x "$FILE_NAME"
-
-    echo "Running tunnel script now..."
     bash "$FILE_NAME"
+
+    {
+        echo "#!/bin/bash"
+        echo "ping -6 -c 1 $CHOSEN_IPV6 > /dev/null || echo \"[$(date)] IPv6 $CHOSEN_IPV6 is unreachable\" >> /var/log/tunnel-ping.log"
+    } > "$PING_FILE"
+    chmod +x "$PING_FILE"
 
     crontab -l 2>/dev/null > "$CRON_TMP"
     echo "@reboot bash $FILE_NAME" >> "$CRON_TMP"
+    echo "0 * * * * bash $PING_FILE" >> "$CRON_TMP"
     crontab "$CRON_TMP"
 
-    echo "Tunnel script saved and applied: $FILE_NAME"
+    echo "Tunnel and ping script created."
 fi
